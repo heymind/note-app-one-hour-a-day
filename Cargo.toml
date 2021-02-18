@@ -1,0 +1,20 @@
+[package]
+name = "note-app-one-hour-a-day"
+version = "0.1.0"
+authors = ["Heymind <heymind@outlook.com>"]
+edition = "2018"
+
+
+[dependencies]
+serde = {version = "1", features = ["derive"]}
+serde_json = "1"
+hyper = { version = "0.14", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+thiserror = "1"
+anyhow = "1"
+http = "*"
+pretty_env_logger = "0.4"
+log = "0.4"
+parking_lot = "0.11"
+futures = "0.3"
+sqlx = { version = "0.5", features = [ "runtime-tokio-rustls", "postgres", "json" ] }
