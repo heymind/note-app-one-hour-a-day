@@ -1,12 +1,12 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use std::iter::Iterator;
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    Error, FnArg, Ident, ItemFn, LitStr, PatType, Result, Token,
+    Error, FnArg, Ident, ItemFn, LitStr, Result, Token,
 };
 
 #[derive(Debug)]
@@ -39,8 +39,9 @@ impl RoutesAttr {
 }
 
 fn transform(attr: RoutesAttr, mut input: ItemFn) -> Result<TokenStream> {
-    let ident = &input.sig.ident;
-
+    let mut ident: Ident = parse_quote!(origin);
+    std::mem::swap(&mut input.sig.ident, &mut ident);
+    let vis = &input.vis;
     let mut extractors: Vec<TokenStream> = Vec::with_capacity(input.sig.inputs.len());
     for arg in input.sig.inputs.iter_mut() {
         if let FnArg::Typed(arg) = arg {
@@ -60,25 +61,38 @@ fn transform(attr: RoutesAttr, mut input: ItemFn) -> Result<TokenStream> {
         }
     }
 
-    let endpoint_id = format_ident!("{}_endpoint", ident);
     let extractor_iter = extractors.iter();
     let methods = attr.methods();
     let endpoint_path = attr.path();
-    let endpoint_ts = quote! {
-        static #endpoint_id: ::routes::Endpoint = ::routes::Endpoint::Single {
-            path: #endpoint_path,
-            methods: &[#(#methods),*],
-            handle: ::std::lazy::SyncLazy::new(||{
-                ::routes::Handle(Box::new(|mut req| {
-                    Box::pin(async {
-                        Ok::<::hyper::Response<::hyper::Body>,Box<(dyn ::std::error::Error + Send + Sync)>>(#ident(#(#extractor_iter),*).await?)
-                    })
-                }))
-            })
+    //    let endpoint_ts = quote! {
+    //       static #endpoint_id: ::routes::Endpoint = ::routes::Endpoint::Single {
+    //            path: #endpoint_path,
+    //            methods: &[#(#methods),*],
+    //            handle: ::std::lazy::SyncLazy::new(||{
+    //                ::routes::Handle(Box::new(|mut req| {
+    //                    Box::pin(async {
+    //                        Ok::<::hyper::Response<::hyper::Body>,Box<(dyn ::std::error::Error + Send + Sync)>>(#ident(#(#extractor_iter),*).await?)
+    //                    })
+    //               }))
+    ////           })
+    //     }
+    // };
+    let origin_sig = &input.sig;
+    let origin_block = &input.block;
+    let ts = quote! {
+        #vis mod #ident {
+            use super::*;
+            pub #origin_sig #origin_block
+            pub async fn handle(mut req: ::hyper::Request<::hyper::Body>) -> ::std::result::Result<::hyper::Response<::hyper::Body>,Box<(dyn ::std::error::Error + Send + Sync)>> {
+                Ok::<::hyper::Response<::hyper::Body>,Box<(dyn ::std::error::Error + Send + Sync)>>(origin(#(#extractor_iter),*).await?)
+            }
+            pub static endpoint: ::routes::Endpoint = ::routes::Endpoint::single(&[#(#methods),*],#endpoint_path,||{
+                ::routes::Handle(Box::new(|req|Box::pin(async{handle(req).await})))
+            });
         }
-    };
 
-    Ok(endpoint_ts)
+    };
+    Ok(ts)
 }
 #[proc_macro_attribute]
 pub fn routes(
