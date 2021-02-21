@@ -77,6 +77,7 @@ pub async fn serve(
         }
     }
 
+
     let set_builder = RegexSetBuilder::new(ctx.routes.keys());
 
     ctx.set = set_builder.build().unwrap();

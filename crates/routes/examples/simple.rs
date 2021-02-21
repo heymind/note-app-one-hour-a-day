@@ -15,10 +15,13 @@ async fn world() -> anyhow::Result<Response<Body>> {
         .body(Body::from("world"))?)
 }
 
-static root: Endpoint = Endpoint::group("root", &[&hello::endpoint, &world::endpoint]);
+routes_group!(pub root "root" {
+    "h" => world,
+    "w" => {"v" => {hello,world}}});
+
 #[tokio::main]
 async fn main() {
     let builder = hyper::Server::bind(&"127.0.0.1:4000".parse().unwrap());
 
-    serve(&root, builder).await.unwrap();
+    serve(&root::endpoint, builder).await.unwrap();
 }

@@ -1,14 +1,16 @@
+use either::Either;
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::iter::Iterator;
 use syn::{
+    braced,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    Error, FnArg, Ident, ItemFn, LitStr, Result, Token,
+    token::Brace,
+    Error, FnArg, Ident, ItemFn, LitStr, Path, Result, Token, Visibility,
 };
-
 #[derive(Debug)]
 struct RoutesAttr {
     methods: Punctuated<Ident, Token![,]>,
@@ -64,19 +66,7 @@ fn transform(attr: RoutesAttr, mut input: ItemFn) -> Result<TokenStream> {
     let extractor_iter = extractors.iter();
     let methods = attr.methods();
     let endpoint_path = attr.path();
-    //    let endpoint_ts = quote! {
-    //       static #endpoint_id: ::routes::Endpoint = ::routes::Endpoint::Single {
-    //            path: #endpoint_path,
-    //            methods: &[#(#methods),*],
-    //            handle: ::std::lazy::SyncLazy::new(||{
-    //                ::routes::Handle(Box::new(|mut req| {
-    //                    Box::pin(async {
-    //                        Ok::<::hyper::Response<::hyper::Body>,Box<(dyn ::std::error::Error + Send + Sync)>>(#ident(#(#extractor_iter),*).await?)
-    //                    })
-    //               }))
-    ////           })
-    //     }
-    // };
+
     let origin_sig = &input.sig;
     let origin_block = &input.block;
     let ts = quote! {
@@ -106,6 +96,126 @@ pub fn routes(
         Err(err) => err.into_compile_error().into(),
     }
 }
+/// pub routes_group!(something  "abc" {
+///     hello, // a endpoint
+///     "/a" => world, // a mount    
+/// .   "/b" => {hello,world, "/d" => hello} // nested mounts
+//})
+// mod something {
+//     pub static endpoint: ::routes::Endpoint = ::routes::Endpoint::group(
+//         "abc",
+//          []
+//     )
+// }
+#[derive(Debug)]
+struct RoutesGroup {
+    vis: Visibility,
+    ident: Ident,
+    prefix: Option<LitStr>,
+    brace: Brace,
+    item: RoutesGroupItem,
+}
+impl Parse for RoutesGroup {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let content;
+        Ok(Self {
+            vis: input.parse()?,
+            ident: input.parse()?,
+            prefix: input.parse()?,
+            brace: braced!(content in input),
+            item: content.parse()?,
+        })
+    }
+}
+impl RoutesGroup {
+    fn transform(self) -> Result<TokenStream> {
+        let Self {
+            vis,
+            ident,
+            prefix,
+            item,
+            ..
+        } = self;
+        let prefix = prefix.map(|v| v.value()).unwrap_or_default();
+        let item_ts = item.transform()?;
+        Ok(quote! {
+            #vis mod #ident {
+                use super::*;
+                pub static endpoint: ::routes::Endpoint = ::routes::Endpoint::group(#prefix,#item_ts);
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+struct RoutesGroupItem(
+    Punctuated<(Option<(LitStr, Token![=>])>, Either<Path, (Brace, Self)>), Token![,]>,
+);
+
+impl RoutesGroupItem {
+    fn transform(self) -> Result<TokenStream> {
+        let mut items = Vec::with_capacity(self.0.len());
+        for item in self.0 {
+            let item = match item {
+                (None, Either::Left(path)) => quote! {&#path::endpoint},
+                (None, Either::Right((_, sub))) => {
+                    let sub_ts = sub.transform()?;
+                    quote! {
+                        {static endpoint: ::routes::Endpoint = ::routes::Endpoint::group("",#sub_ts);&endpoint}
+                    }
+                }
+                (Some((prefix, _)), Either::Left(path)) => {
+                    quote! {
+                        {static endpoint: ::routes::Endpoint = ::routes::Endpoint::group(#prefix,&[&#path::endpoint]);&endpoint}
+                    }
+                }
+                (Some((prefix, _)), Either::Right((_, sub))) => {
+                    let sub_ts = sub.transform()?;
+                    quote! {
+                        {static endpoint: ::routes::Endpoint = ::routes::Endpoint::group(#prefix,#sub_ts);&endpoint}
+                    }
+                }
+            };
+            items.push(item);
+        }
+        Ok(quote! {
+            &[#(#items),*]
+        })
+    }
+}
+impl Parse for RoutesGroupItem {
+    fn parse(input: ParseStream) -> Result<Self> {
+        fn parse_inner(
+            input: ParseStream,
+        ) -> Result<(
+            Option<(LitStr, Token![=>])>,
+            Either<Path, (Brace, RoutesGroupItem)>,
+        )> {
+            let mut prefix = None;
+            let endpoint;
+            if input.lookahead1().peek(LitStr) {
+                prefix = Some((input.parse()?, input.parse()?));
+            }
+            let ahead = input.lookahead1();
+            if ahead.peek(Brace) {
+                let content;
+                endpoint = Either::Right((braced!(content in input), content.parse()?));
+            } else {
+                endpoint = Either::Left(input.parse()?);
+            }
+            Ok((prefix, endpoint))
+        }
+        Ok(Self(Punctuated::parse_terminated_with(input, parse_inner)?))
+    }
+}
+
+#[proc_macro]
+pub fn routes_group(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    match parse_macro_input!(input as RoutesGroup).transform() {
+        Ok(ts) => ts.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -115,6 +225,19 @@ mod tests {
         let routes_attr: RoutesAttr = syn::parse_quote!(get,post "123$");
         assert_eq!(routes_attr.methods(), vec!["GET", "POST"]);
         assert_eq!(routes_attr.path(), "123$");
+    }
+
+    #[test]
+    fn test_parse_routes_group_item() {
+        let item: RoutesGroupItem = syn::parse_quote!(get,post,"here" => get,"there" => {get,post});
+        dbg!(item);
+    }
+
+    #[test]
+    fn test_parse_routes_group() {
+        let item: RoutesGroup =
+            syn::parse_quote!(abc "sss" {get,post,"here" => get,"there" => {get,post}});
+        dbg!(item);
     }
 
     #[test]

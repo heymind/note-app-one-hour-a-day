@@ -946,6 +946,7 @@ dependencies = [
 name = "routes-macro"
 version = "0.1.0"
 dependencies = [
+ "either",
  "proc-macro2",
  "quote",
  "syn",
