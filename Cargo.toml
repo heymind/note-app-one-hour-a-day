@@ -3,5 +3,7 @@
 members = [
     "crates/note-app",
     "crates/routes",
-    "crates/routes-macro"
+    "crates/routes-macro",
+    "crates/sqlxorm",
+    "crates/sqlxorm-macro"
 ]
