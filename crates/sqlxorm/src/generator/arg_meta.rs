@@ -5,7 +5,7 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     token::{Bracket, Eq},
-    Ident, Lit, Result, Token,
+    Ident, Lit, LitStr, Result, Token,
 };
 #[derive(Debug, Default)]
 pub struct ArgMeta(IndexMap<String, Vec<Lit>>);
@@ -26,7 +26,11 @@ impl<'a> Into<ArgMetaIndex<'a>> for usize {
         ArgMetaIndex::Index(self)
     }
 }
+
 impl ArgMeta {
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
     fn _get(&self, index: ArgMetaIndex) -> &[Lit] {
         match index {
             ArgMetaIndex::Index(idx) => self.0.get_index(idx).map(|(_, v)| v),
@@ -35,6 +39,16 @@ impl ArgMeta {
         .map(|values| values.as_slice())
         .unwrap_or_else(|| &[])
     }
+    pub fn has<'a>(&self, index: impl Into<ArgMetaIndex<'a>>) -> bool {
+        if let Some(lit) = self._get(index.into()).first() {
+            match lit {
+                Lit::Bool(v) if v.value == false => false,
+                _ => true,
+            }
+        } else {
+            false
+        }
+    }
     pub fn get_bool<'a>(&self, index: impl Into<ArgMetaIndex<'a>>) -> Option<bool> {
         if let Some(Lit::Bool(b)) = self._get(index.into()).first() {
             Some(b.value)
@@ -42,12 +56,28 @@ impl ArgMeta {
             None
         }
     }
+    pub fn is_true<'a>(&self, index: impl Into<ArgMetaIndex<'a>>) -> bool {
+        self.get_bool(index).filter(|x| *x == true).is_some()
+    }
+
     pub fn get_str<'a>(&self, index: impl Into<ArgMetaIndex<'a>>) -> Option<String> {
         if let Some(Lit::Str(s)) = self._get(index.into()).first() {
             Some(s.value())
         } else {
             None
         }
+    }
+    pub fn get_strings<'a>(&self, index: impl Into<ArgMetaIndex<'a>>) -> Vec<String> {
+        self._get(index.into())
+            .iter()
+            .filter_map(|lit| {
+                if let Lit::Str(s) = lit {
+                    Some(s.value())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 impl Parse for ArgMeta {

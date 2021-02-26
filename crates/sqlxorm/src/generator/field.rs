@@ -1,5 +1,6 @@
 use crate::ArgMeta;
 use anyhow::Result;
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::parse::Parser;
 use syn::parse_quote;
@@ -55,17 +56,21 @@ impl Default for Field {
 }
 
 impl Field {
+    pub fn field_ty(&self) -> TokenStream {
+        let field_ty = &self.data_type;
+        if self.nullable {
+            quote! {Option<#field_ty>}
+        } else {
+            field_ty.to_token_stream()
+        }
+    }
     pub fn transform(&mut self, arg: &ArgMeta, field: Option<syn::Field>) -> Result<syn::Field> {
         Ok(
             if field.is_none() || arg.get_bool("generated").unwrap_or_default() {
                 let column_name = &self.column_name;
                 let field_id = format_ident!("{}", self.name);
-                let field_ty = &self.data_type;
-                let field_ty = if self.nullable {
-                    quote! {Option<#field_ty>}
-                } else {
-                    field_ty.to_token_stream()
-                };
+
+                let field_ty = self.field_ty();
                 let ts = quote! {
                     #[column(#column_name, generated = true)]
                     #field_id: #field_ty

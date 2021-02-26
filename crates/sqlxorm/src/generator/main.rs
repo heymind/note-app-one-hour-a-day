@@ -1,5 +1,6 @@
 use std::io::{Read, Seek};
 
+use accessor::transform;
 use anyhow::Result;
 use quote::ToTokens;
 use sqlx::postgres::PgPoolOptions;
@@ -13,12 +14,15 @@ mod field;
 use field::{Field, FieldDataType};
 mod column_def;
 use column_def::ColumnDef;
+mod accessor;
+mod query_builder;
+mod save;
 use std::io::SeekFrom;
 use std::io::Write;
 use syn::{
     parse::Parse,
     visit_mut::{self, VisitMut},
-    File, ItemStruct,
+    File, ItemImpl, ItemStruct,
 };
 struct Vis(Registry);
 
@@ -35,6 +39,23 @@ impl visit_mut::VisitMut for Vis {
         } else {
             panic!("table {} not found", table_name);
         }
+    }
+    fn visit_item_impl_mut(&mut self, i: &mut ItemImpl) {
+        let attr = i.attrs.iter().find(|a| a.path.is_ident("entity"));
+        if attr.is_none() {
+            return;
+        }
+        let entity = self
+            .0
+            .entities
+            .values_mut()
+            .find(|ent| match i.self_ty.as_ref() {
+                syn::Type::Path(tp) => tp.path.is_ident(&ent.item_name),
+                _ => false,
+            })
+            .expect("struct not found");
+        accessor::transform(entity, i).unwrap();
+        save::transform(entity, i).unwrap();
     }
 }
 #[tokio::main]
